@@ -7,6 +7,7 @@
 dir_of_script=$(dirname $0)
 bugsinpy_location=$(realpath $dir_of_script/../..)
 temp_projects="$bugsinpy_location/temp/projects"
+logs_dir="$bugsinpy_location/temp/logs" # Directory to save logs
 index_name="bugsinpy-index.csv"
 index_file="$bugsinpy_location/projects/$index_name"
 
@@ -29,12 +30,14 @@ case $1 in
     exit 0;;
  -c)
     rm -rf "$temp_projects"
+    rm -rf "$logs_dir" # Cleanup logs directory as well
     exit 0;;
  -p)
     projects="${@:2}";;
 esac
 
 mkdir -p $temp_projects
+mkdir -p $logs_dir # Ensure logs directory exists
 
 if ! echo $projects | grep -q ":"; then
   projects=$(ls $bugsinpy_location/projects | grep -v $index_name)
@@ -88,7 +91,13 @@ for project_name in $projects; do
 
       # Install dependencies (if any)
       pip install -r $bug_source_dir/requirements.txt &>> $work_dir/logs.txt
-      pip install mutpy &>> $work_dir/logs.txt
+
+      # Only install mutpy from source if it is not installed
+      if ! python -c "import mutpy" &> /dev/null; then
+          git clone https://github.com/kjain14/mutpy.git
+          cd mutpy && python setup.py install &>> $work_dir/logs.txt
+          cd ..
+      fi
 
       # Run mutation testing on the fixed version of the buggy file with the entire test suite
       cd $bug_source_dir
@@ -97,11 +106,12 @@ for project_name in $projects; do
       target_module=$(grep "fixed file:" $bug_info | cut -d":" -f2 | xargs) # Extract target module from bug info
       tests_dir=$(find . -name "*_test.py" | xargs) # Assuming tests are identifiable by _test.py suffix
 
+      mutation_log_file="$logs_dir/mutation_${project}_bug${bug}.txt" # Path to save mutation log
       mutation_output="$work_dir/mutation_${project}_bug${bug}.txt"
-      mutpy -t $target_module -u $tests_dir -a &> $mutation_output
+      mutpy -t $target_module -u $tests_dir -a &> $mutation_log_file
 
       # Check mutation test output and log results
-      if grep -q "error" $mutation_output; then
+      if grep -q "error" $mutation_log_file; then
         echo "$project,$bug,error" | tee -a $index_file
       else
         echo "$project,$bug,done" | tee -a $index_file
