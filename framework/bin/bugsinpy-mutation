@@ -57,13 +57,25 @@ fi
 
 ###Activate environment
 cd "$work_dir"
-if [ -d "env/Scripts" ]; then
-  source env/Scripts/activate
-else
-  source env/bin/activate
+. /opt/conda/etc/profile.d/conda.sh
+# Cleanup requirements.txt from unwanted spaces
+sed -i -e '/^\s*#.*$/d' -e '/^\s*$/d' "$work_dir/bugsinpy_requirements.txt"
+# dos2unix is required to make sure requirements.txt is always the correct encoding
+dos2unix $work_dir/bugsinpy_requirements.txt &>/dev/null
+# Generate unique hash for the current enviroment
+bug_python_version=$(grep -o "3\..\.." "$work_dir/bugsinpy_bug.info")
+conda_env_name=$(cat <(echo $bug_python_version) "$work_dir/bugsinpy_requirements.txt" | md5sum | cut -d' ' -f 1)
+if ! conda activate $conda_env_name; then
+   echo "Please use 'conda create -n $conda_env_name -y python=$bug_python_version' to create your enviroment first or bugsinpy-mutationall -p project_name:bug_id"
+   exit
 fi
-pip install mutpy
 
+# Only install mutpy from source if it is not installed
+if ! python -c "import mutpy" &> /dev/null; then
+      git clone https://github.com/kjain14/mutpy.git
+      cd mutpy && python setup.py install &>> $work_dir/logs.txt
+      cd ..
+fi
 rm -f mut_bugsinpy.py
 
 ###Adding mutpy_bugsinpy file
@@ -142,9 +154,9 @@ else
          test_now=$(echo $test_py | tr '/' '.')
          echo "$patch_now"
          echo "$test_now"
-         echo "python mut_bugsinpy.py --target $patch_now --unit-test $test_now --runner $pytest"
-         echo "python mut_bugsinpy.py --target $patch_now --unit-test $test_now --runner $pytest -m" &>>"$work_dir/bugsinpy_mutation.txt"
-python mut_bugsinpy.py --target $patch_now --unit-test $test_now --runner $pytest -m 2>&1 | tee $work_dir/bugsinpy_mutation.txt
+         echo "python mut_bugsinpy.py --target $patch_now --show-all-killing-tests --unit-test $test_now --runner $pytest"
+         echo "python mut_bugsinpy.py --target $patch_now --show-all-killing-tests --unit-test $test_now --runner $pytest -m" &>>"$work_dir/bugsinpy_mutation.txt"
+python mut_bugsinpy.py --target $patch_now --show-all-killing-tests --unit-test $test_now --runner $pytest -m 2>&1 | tee $work_dir/bugsinpy_mutation.txt
          #mutation=$(python mut_bugsinpy.py --target $patch_now --unit-test $test_now --runner $pytest -m 2>&1)
          #echo "$mutation"
          #echo "$mutation" &>>"$work_dir/bugsinpy_mutation.txt"
@@ -170,7 +182,7 @@ python mut_bugsinpy.py --target $patch_now --unit-test $test_now --runner $pytes
          test_now=$(echo $test_py | tr '/' '.')
          echo "$patch_now"
          echo "$test_now"
-python mut_bugsinpy.py --target $patch_now --unit-test $test_now --runner $pytest -m 2>&1 | tee $work_dir/bugsinpy_mutation.txt
+python mut_bugsinpy.py --target $patch_now  --show-all-killing-tests --unit-test $test_now --runner $pytest -m 2>&1 | tee $work_dir/bugsinpy_mutation.txt
          #mutation=$(python mut_bugsinpy.py --target $patch_now --unit-test $test_now --runner $pytest -m 2>&1)
          #echo "$mutation"
          #echo "python mut_bugsinpy.py --target $patch_now --unit-test $test_now --runner $pytest -m" &>>"$work_dir/bugsinpy_mutation.txt"
@@ -179,3 +191,4 @@ python mut_bugsinpy.py --target $patch_now --unit-test $test_now --runner $pytes
    done
    fi
 fi
+conda deactivate

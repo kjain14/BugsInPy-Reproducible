@@ -1,15 +1,9 @@
 #!/bin/bash
+set -x
 
 ### bugsinpy-mutateall performs mutation testing on all projects and buggy versions
 # This script is adapted to use conda environments, similar to the bugsinpy-testall script.
 # It targets the fixed version of buggy files for mutation testing against the entire test suite.
-
-dir_of_script=$(dirname $0)
-bugsinpy_location=$(realpath $dir_of_script/../..)
-temp_projects="$bugsinpy_location/temp/projects"
-logs_dir="$bugsinpy_location/temp/logs" # Directory to save logs
-index_name="bugsinpy-index.csv"
-index_file="$bugsinpy_location/projects/$index_name"
 
 usage="
        -h
@@ -22,6 +16,13 @@ usage="
              pandas:75:100 (run mutation tests for bugs 75 to 100 in pandas)
              black:5 ansible: (run mutation tests for bug 5 in black and all bugs in ansible)
 "
+
+dir_of_script=$(dirname $0)
+bugsinpy_location=$(realpath $dir_of_script/../..)
+temp_projects="$bugsinpy_location/temp/projects"
+logs_dir="$bugsinpy_location/temp/logs" # Directory to save logs
+index_name="bugsinpy-mutation.csv"
+index_file="$bugsinpy_location/projects/$index_name"
 
 case $1 in
  -[h?] | --help)
@@ -49,7 +50,7 @@ fi
 
 # Iterate over the projects
 for project_name in $projects; do
-
+  echo $project_name
   # Extract start, finish, and project name
   if echo $projects | grep -q ":"; then
     start=$(echo $project_name | cut -d ":" -f 2)
@@ -67,48 +68,43 @@ for project_name in $projects; do
   fi
 
   work_dir="$temp_projects/$project"
-
+  echo $work_dir
   # For each bug, run mutation testing
   for bug in $(seq $start $finish); do
 
     bug_source_dir="$bugsinpy_location/projects/$project/bugs/$bug"
 
-    if [ -d "$bug_source_dir" ]; then
+    if ! grep "$project,$bug," $index_file && [ -d "$bug_source_dir" ]; then
+
+      # Make sure requirements.txt always exist even if empty
+      touch $bug_source_dir/requirements.txt
 
       bug_info="$work_dir/bugsinpy_bug.info"
 
-      # Generate unique hash for the current environment
+      bugsinpy-checkout -p $project -v 1 -i $bug -w $temp_projects &>> $temp_projects/$project-checkout-logs.txt
+      cd $work_dir
+
+      # Cleanup requirements.txt from unwanted spaces
+      # dos2unix is required to make sure requirements.txt is always the correct encoding
+      requirements="$work_dir/bugsinpy_requirements.txt"
+      sed -i -e '/^\s*#.*$/d' -e '/^\s*$/d' "$requirements"
+      dos2unix $requirements &>/dev/null
+
+      # Add environment
+      . /opt/conda/etc/profile.d/conda.sh &>> $work_dir/logs.txt
+      # Generate unique hash for the current enviroment
       bug_python_version=$(grep -o "3\..\.." $bug_info)
-      conda_env_name=$(cat <(echo $bug_python_version) "$bug_source_dir/requirements.txt" | md5sum | cut -d' ' -f 1)
+      conda_env_name=$(cat <(echo $bug_python_version) "$requirements" | md5sum | cut -d' ' -f 1)
 
-      # Setup Conda environment
-      . /opt/conda/etc/profile.d/conda.sh
       if ! conda env list | grep -q "$conda_env_name"; then
-        conda create -n $conda_env_name -y python=$bug_python_version &>> $work_dir/logs.txt
+        conda create -n $conda_env_name -y python=$bug_python_version pytest &>> $work_dir/logs.txt
       fi
 
-      conda activate $conda_env_name
-
-      # Install dependencies (if any)
-      pip install -r $bug_source_dir/requirements.txt &>> $work_dir/logs.txt
-
-      # Only install mutpy from source if it is not installed
-      if ! python -c "import mutpy" &> /dev/null; then
-          git clone https://github.com/kjain14/mutpy.git
-          cd mutpy && python setup.py install &>> $work_dir/logs.txt
-          cd ..
-      fi
-
-      # Run mutation testing on the fixed version of the buggy file with the entire test suite
-      cd $bug_source_dir
-
-      # Assuming $bug_source_dir contains a path to the fixed version of the buggy file and the test suite
-      target_module=$(grep "fixed file:" $bug_info | cut -d":" -f2 | xargs) # Extract target module from bug info
-      tests_dir=$(find . -name "*_test.py" | xargs) # Assuming tests are identifiable by _test.py suffix
-
+      bugsinpy-compile &>> $work_dir/logs.txt
+      bugsinpy-test &> "$bug_source_dir/bug_$version.txt"
+        
       mutation_log_file="$logs_dir/mutation_${project}_bug${bug}.txt" # Path to save mutation log
-      mutation_output="$work_dir/mutation_${project}_bug${bug}.txt"
-      mutpy -t $target_module -u $tests_dir -a &> $mutation_log_file
+      bugsinpy-mutation &> $mutation_log_file
 
       # Check mutation test output and log results
       if grep -q "error" $mutation_log_file; then
