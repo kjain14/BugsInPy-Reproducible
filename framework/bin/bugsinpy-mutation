@@ -191,4 +191,8 @@ python mut_bugsinpy.py --target $patch_now  --show-all-killing-tests --unit-test
    done
    fi
 fi
+
+cd "$work_dir"
+pip uninstall -y mutpy
+rm -rf mutpy
 conda deactivate
